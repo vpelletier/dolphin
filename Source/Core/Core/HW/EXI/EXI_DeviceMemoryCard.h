@@ -72,6 +72,11 @@ private:
   // Variant of CmdDone which schedules an event later in the future to complete the command.
   void CmdDoneLater(u64 cycles);
 
+  // Cipher keystream progress methods.
+  void AdvanceHandshakeKeystream(int count);
+  void ApplyHandshakeLFSRTap();
+  void AdvanceSerialKeystream(void);
+
   enum class Command
   {
     NintendoID = 0x00,
@@ -106,6 +111,24 @@ private:
   unsigned int m_address;
   u32 m_memory_card_size;
   std::unique_ptr<MemoryCardBase> m_memory_card;
+
+  enum class HandshakeCipherState
+  {
+    // Cipher is not initialised.
+    Idle,
+    // Seed has been received, iterating over the keystream without meaningful
+    // data exchange.
+    Prime,
+    // Send challenge to host.
+    Challenge,
+    // Receive response from host, part 1...
+    ResponseLSW,
+    // ... and part 2.
+    ResponseMSW,
+  };
+  HandshakeCipherState m_cipher_state;
+  u32 m_handshake_keystream;
+  u64 m_serial_keystream;
 
 protected:
   void TransferByte(u8& byte) override;
