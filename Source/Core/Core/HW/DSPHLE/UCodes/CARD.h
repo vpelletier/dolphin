@@ -10,6 +10,9 @@ namespace DSP::HLE
 {
 class DSPHLE;
 
+// Compute a 32bits integer to be sent to memory cards to unlock them.
+void DoCardHash(u32 address);
+
 class CARDUCode final : public UCodeInterface
 {
 public:

@@ -14,6 +14,7 @@
 #include "Core/HW/DSP.h"
 #include "Core/HW/DSPHLE/DSPHLE.h"
 #include "Core/HW/DSPHLE/MailHandler.h"
+#include "Core/HW/DSPHLE/UCodes/CARD.h"
 #include "Core/HW/DSPHLE/UCodes/GBA.h"
 #include "Core/HW/DSPHLE/UCodes/UCodes.h"
 
@@ -325,6 +326,9 @@ void ZeldaUCode::HandleMailLight(u32 mail)
     case 0x03:
       add_command = false;
       break;
+    case 0x0B:
+      m_mail_expected_cmd_mails = 1;
+      break;
     case 0x0C:
       if (m_flags & SUPPORTS_GBA_CRYPTO)
         m_mail_expected_cmd_mails = 1;
@@ -425,7 +429,6 @@ void ZeldaUCode::RunPendingCommands()
     {
     case 0x00:
     case 0x0A:  // not a NOP in the NTSC IPL ucode but seems unused
-    case 0x0B:  // not a NOP in both IPL ucodes but seems unused
     case 0x0F:
       // NOP commands. Log anyway in case we encounter a new version
       // where these are not NOPs anymore.
@@ -532,6 +535,18 @@ void ZeldaUCode::RunPendingCommands()
         RenderAudio();
       }
       return;
+
+    // Command 0B: Hash data, as part of memorycard unlocking handshake.
+    case 0x0B:
+    {
+      const u32 mask = ((m_flags & NO_ARAM) == 0) ? 0x3fff'ffff : 0x0fff'ffff;
+      const u32 address = Read32() & mask;
+
+      DoCardHash(address);
+
+      SendCommandAck(CommandAck::STANDARD, sync);
+      break;
+    }
 
     // Command 0C: used for multiple purpose depending on the UCode version:
     // * IPL NTSC, Luigi's Mansion: TODO (unknown as of now).

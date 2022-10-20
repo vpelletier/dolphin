@@ -169,8 +169,16 @@ static void DoCardHashStep(CARDUCode::CardUcodeWorkData* data, u16 prev1, u16 pr
   data->work_040e = data->work_0408 ^ data->work_040a ^ data->work_040c;
 }
 
-static void DoCardHash(CARDUCode::CardUcodeParameters params)
+void DoCardHash(u32 address)
 {
+  CARDUCode::CardUcodeParameters params = ReadParameters(address);
+
+  INFO_LOG_FMT(DSPHLE, "Input MRAM address: {:08x}", params.mram_input_addr);
+  INFO_LOG_FMT(DSPHLE, "Unused: {:04x}", params.unused);
+  INFO_LOG_FMT(DSPHLE, "Input size: {:04x}", params.input_size);
+  INFO_LOG_FMT(DSPHLE, "ARAM work address: {:08x}", params.aram_work_addr);
+  INFO_LOG_FMT(DSPHLE, "Output MRAM address: {:08x}", params.mram_output_addr);
+
   // Large ROM function from 8644 to 86e4
   CARDUCode::CardUcodeWorkData data{};
 
@@ -331,15 +339,8 @@ void CARDUCode::HandleMail(u32 mail)
 
     INFO_LOG_FMT(DSPHLE, "CARDUCode - Reading input parameters from address {:08x} ({:08x})",
                  address, mail);
-    CardUcodeParameters params = ReadParameters(address);
-    INFO_LOG_FMT(DSPHLE, "Input MRAM address: {:08x}", params.mram_input_addr);
-    INFO_LOG_FMT(DSPHLE, "Unused: {:04x}", params.unused);
-    INFO_LOG_FMT(DSPHLE, "Input size: {:04x}", params.input_size);
-    INFO_LOG_FMT(DSPHLE, "ARAM work address: {:08x}", params.aram_work_addr);
-    INFO_LOG_FMT(DSPHLE, "Output MRAM address: {:08x}", params.mram_output_addr);
-
     // 003d - Call into ROM code
-    DoCardHash(params);
+    DoCardHash(address);
 
     // 003f - 0045: send a response.
     m_mail_handler.PushMail(DSP_DONE);
