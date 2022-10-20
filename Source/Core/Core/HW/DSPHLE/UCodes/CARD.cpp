@@ -174,8 +174,16 @@ static void DoCardHashStep(CARDUCode::CardUcodeWorkData* data, u16 prev1, u16 pr
   data->work_040e = data->work_0408 ^ data->work_040a ^ data->work_040c;
 }
 
-static void DoCardHash(CARDUCode::CardUcodeParameters params)
+void DoCardHash(Memory::MemoryManager& memory, u32 address)
 {
+  CARDUCode::CardUcodeParameters params = ReadParameters(memory, address);
+
+  INFO_LOG_FMT(DSPHLE, "Input MRAM address: {:08x}", params.mram_input_addr);
+  INFO_LOG_FMT(DSPHLE, "Unused: {:04x}", params.unused);
+  INFO_LOG_FMT(DSPHLE, "Input size: {:04x}", params.input_size);
+  INFO_LOG_FMT(DSPHLE, "ARAM work address: {:08x}", params.aram_work_addr);
+  INFO_LOG_FMT(DSPHLE, "Output MRAM address: {:08x}", params.mram_output_addr);
+
   // Large ROM function from 8644 to 86e4
   CARDUCode::CardUcodeWorkData data{};
 
@@ -185,7 +193,7 @@ static void DoCardHash(CARDUCode::CardUcodeParameters params)
   // (We just use our own buffer instead of dealing with DRAM)
   std::vector<u8> buffer;
   buffer.reserve(dma_size);
-  const u8* const input_data = static_cast<u8*>(HLEMemory_Get_Pointer(params.mram_input_addr));
+  const u8* const input_data = static_cast<u8*>(HLEMemory_Get_Pointer(memory, params.mram_input_addr));
   std::copy(input_data, input_data + dma_size, std::back_inserter(buffer));
 
   // 865a - 8669 - Set up the accelerator
@@ -282,7 +290,7 @@ static void DoCardHash(CARDUCode::CardUcodeParameters params)
   }
 
   // 86d6 - 86e4 - DMA back the hash
-  HLEMemory_Write_U32(params.mram_output_addr, data.work_040a);
+  HLEMemory_Write_U32(memory, params.mram_output_addr, data.work_040a);
 }
 
 void CARDUCode::Update()
@@ -336,15 +344,8 @@ void CARDUCode::HandleMail(u32 mail)
 
     INFO_LOG_FMT(DSPHLE, "CARDUCode - Reading input parameters from address {:08x} ({:08x})",
                  address, mail);
-    CardUcodeParameters params = ReadParameters(address);
-    INFO_LOG_FMT(DSPHLE, "Input MRAM address: {:08x}", params.mram_input_addr);
-    INFO_LOG_FMT(DSPHLE, "Unused: {:04x}", params.unused);
-    INFO_LOG_FMT(DSPHLE, "Input size: {:04x}", params.input_size);
-    INFO_LOG_FMT(DSPHLE, "ARAM work address: {:08x}", params.aram_work_addr);
-    INFO_LOG_FMT(DSPHLE, "Output MRAM address: {:08x}", params.mram_output_addr);
-
     // 003d - Call into ROM code
-    DoCardHash(params);
+    DoCardHash(m_dsphle->GetSystem().GetMemory(), address);
 
     // 003f - 0045: send a response.
     m_mail_handler.PushMail(DSP_DONE);
