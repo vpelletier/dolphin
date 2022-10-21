@@ -499,6 +499,7 @@ void CEXIMemoryCard::TransferByte(u8& byte)
         }
         else
         {  // Card is still locked
+          Common::BigEndianValue<u64> format_time;
           switch (m_cipher_state)
           {
           case HandshakeCipherState::Challenge:
@@ -531,15 +532,8 @@ void CEXIMemoryCard::TransferByte(u8& byte)
                                     ((m_handshake_keystream & 0x55555555) << 1);
             ApplyHandshakeLFSRTap();
             // Prime the serial cipher
-            // TODO: figure out the proper (endian-safe) way to do this
-            m_memory_card->Read(12 + 0, 1, ((u8*)&m_serial_keystream) + 7);
-            m_memory_card->Read(12 + 1, 1, ((u8*)&m_serial_keystream) + 6);
-            m_memory_card->Read(12 + 2, 1, ((u8*)&m_serial_keystream) + 5);
-            m_memory_card->Read(12 + 3, 1, ((u8*)&m_serial_keystream) + 4);
-            m_memory_card->Read(12 + 4, 1, ((u8*)&m_serial_keystream) + 3);
-            m_memory_card->Read(12 + 5, 1, ((u8*)&m_serial_keystream) + 2);
-            m_memory_card->Read(12 + 6, 1, ((u8*)&m_serial_keystream) + 1);
-            m_memory_card->Read(12 + 7, 1, ((u8*)&m_serial_keystream) + 0);
+            m_memory_card->Read(12, 8, (u8*)&format_time);
+            m_serial_keystream = format_time;
             AdvanceSerialKeystream();
             // Fall through
           default:
