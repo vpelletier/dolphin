@@ -115,7 +115,10 @@ CEXIMemoryCard::CEXIMemoryCard(const Slot slot, bool gci_folder,
   m_interrupt_switch = 0;
   m_interrupt_set = false;
   m_command = Command::NintendoID;
-  m_status = MC_STATUS_BUSY | MC_STATUS_UNLOCKED | MC_STATUS_READY;
+  m_status = MC_STATUS_BUSY | MC_STATUS_READY;
+  m_cipher_state = HandshakeCipherState::Idle;
+  m_handshake_keystream = 0;
+  m_serial_keystream = 0;
   m_position = 0;
   m_programming_buffer.fill(0);
   // Nintendo Memory Card EXI IDs
@@ -318,6 +321,40 @@ void CEXIMemoryCard::SetCS(int cs)
       }
       break;
 
+    case Command::ReadArray:
+      if ((m_status & MC_STATUS_UNLOCKED) == 0)
+      {
+        switch (m_cipher_state)
+        {
+        case HandshakeCipherState::Prime:
+          // Advance the handshake cipher by the transaction length, minus...
+          // - the command lenght (5 bytes)
+          // - the turn-around length (4 bytes)
+          // - 3 bytes, as we want the current keystream byte to be the lsB of
+          //   m_handshake_keystream to avoid shift operations.
+          // multiply by 8 to get the number of bits, and shift one more bit.
+          // XXX: host is expected to have read at least 4 bytes.
+          AdvanceHandshakeKeystream((m_position - 5 - 4 - 3) * 8 + 1);
+          // Handshake cipher is now fully primed.
+          m_cipher_state = HandshakeCipherState::Challenge;
+          break;
+        case HandshakeCipherState::Challenge:
+          AdvanceHandshakeKeystream(1);
+          m_cipher_state = HandshakeCipherState::ResponseMSW;
+          break;
+        case HandshakeCipherState::ResponseMSW:
+          m_cipher_state = HandshakeCipherState::ResponseLSW;
+          break;
+        case HandshakeCipherState::ResponseLSW:
+          m_cipher_state = HandshakeCipherState::Idle;
+          m_status |= MC_STATUS_UNLOCKED;
+          break;
+        default:
+          // Should be unreachable.
+          break;
+        }
+      }
+
     default:
       break;
     }
@@ -329,6 +366,46 @@ bool CEXIMemoryCard::IsInterruptSet()
   if (m_interrupt_switch)
     return m_interrupt_set;
   return false;
+}
+
+void CEXIMemoryCard::ApplyHandshakeLFSRTap()
+{
+  // The handshake cipher is a bitstream cipher based on a single 32bits LFSR.
+  // This implementation shifts to the left, the output bitstream being
+  // nominally the msb, but in practice m_handshake_keystream contains always
+  // the most recent 32bits of keystream.
+  // With a left shift, taps are at positions 0x81010100.
+  // The lsb (a newly generated keystream bit) is set if there is an even
+  // number of taped bits set.
+  switch (m_handshake_keystream & 0x81010100)
+  {
+  case 0x00000000:  // 0 0 0 0
+  case 0x00010100:  // 0 0 1 1
+  case 0x01000100:  // 0 1 0 1
+  case 0x01010000:  // 0 1 1 0
+  case 0x80000100:  // 1 0 0 1
+  case 0x80010000:  // 1 0 1 0
+  case 0x81000000:  // 1 1 0 0
+  case 0x81010100:  // 1 1 1 1
+    m_handshake_keystream |= 1;
+    break;
+  default:
+    break;
+  }
+}
+
+void CEXIMemoryCard::AdvanceHandshakeKeystream(int count)
+{
+  while (count-- > 0)
+  {
+    m_handshake_keystream <<= 1;
+    ApplyHandshakeLFSRTap();
+  }
+}
+
+void CEXIMemoryCard::AdvanceSerialKeystream(void)
+{
+  m_serial_keystream = (m_serial_keystream * (u64)0x41c64e6d + (u64)12345) >> 16;
 }
 
 void CEXIMemoryCard::TransferByte(u8& byte)
@@ -399,7 +476,6 @@ void CEXIMemoryCard::TransferByte(u8& byte)
       {
       case 1:  // AD1
         m_address = byte << 17;
-        byte = 0xFF;
         break;
       case 2:  // AD2
         m_address |= byte << 9;
@@ -411,13 +487,61 @@ void CEXIMemoryCard::TransferByte(u8& byte)
         m_address |= (byte & 0x7F);
         break;
       }
-      if (m_position > 1)  // not specified for 1..8, anyway
+      if (m_position < 9)
       {
-        m_memory_card->Read(m_address & (m_memory_card_size - 1), 1, &byte);
-        // after 9 bytes, we start incrementing the address,
-        // but only the sector offset - the pointer wraps around
-        if (m_position >= 9)
-          m_address = (m_address & ~0x1FF) | ((m_address + 1) & 0x1FF);
+        byte = 0xFF;
+      }
+      else
+      {
+        if (m_status & MC_STATUS_UNLOCKED)
+        {
+          m_memory_card->Read(m_address & (m_memory_card_size - 1), 1, &byte);
+        }
+        else
+        {  // Card is still locked
+          Common::BigEndianValue<u64> format_time;
+          switch (m_cipher_state)
+          {
+          case HandshakeCipherState::Challenge:
+            // XXX: keep reading from card after the 12th byte, real
+            // implementation would emit a random value for host to decrypt
+            // and base Response{L,M}SW address on.
+            m_memory_card->Read(m_address & (m_memory_card_size - 1), 1, &byte);
+            // decrypt serial from storage
+            byte -= m_serial_keystream;
+            AdvanceSerialKeystream();
+            m_serial_keystream &= (u64)0x7fff;
+            AdvanceSerialKeystream();
+            // encrypt serial byte for the handshake
+            byte ^= m_handshake_keystream & 0xff;
+            AdvanceHandshakeKeystream(8);
+            break;
+          case HandshakeCipherState::Idle:
+            m_cipher_state = HandshakeCipherState::Prime;
+            // Prime the handshake cipher
+            m_handshake_keystream = m_address << 12;
+            m_handshake_keystream = ((m_handshake_keystream & 0xffff0000) >> 16) |
+                                    ((m_handshake_keystream & 0x0000ffff) << 16);
+            m_handshake_keystream = ((m_handshake_keystream & 0xff00ff00) >> 8) |
+                                    ((m_handshake_keystream & 0x00ff00ff) << 8);
+            m_handshake_keystream = ((m_handshake_keystream & 0xf0f0f0f0) >> 4) |
+                                    ((m_handshake_keystream & 0x0f0f0f0f) << 4);
+            m_handshake_keystream = ((m_handshake_keystream & 0xcccccccc) >> 2) |
+                                    ((m_handshake_keystream & 0x33333333) << 2);
+            m_handshake_keystream = ((m_handshake_keystream & 0xaaaaaaaa) >> 1) |
+                                    ((m_handshake_keystream & 0x55555555) << 1);
+            ApplyHandshakeLFSRTap();
+            // Prime the serial cipher
+            m_memory_card->Read(12, 8, (u8*)&format_time);
+            m_serial_keystream = format_time;
+            AdvanceSerialKeystream();
+            // Fall through
+          default:
+            byte = 0xFF;
+            break;
+          }
+        }
+        m_address = (m_address & ~0x1FF) | ((m_address + 1) & 0x1FF);
       }
       break;
 
@@ -510,6 +634,9 @@ void CEXIMemoryCard::DoState(PointerWrap& p)
     p.Do(m_address);
     m_memory_card->DoState(p);
     p.Do(m_card_slot);
+    p.Do(m_cipher_state);
+    p.Do(m_handshake_keystream);
+    p.Do(m_serial_keystream);
   }
 }
 
