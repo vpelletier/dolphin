@@ -96,15 +96,15 @@ void CARDUCode::Initialize()
 //
 // I haven't determined the cause of the bug for LLE Rec yet.
 
-static CARDUCode::CardUcodeParameters ReadParameters(u32 address)
+static CARDUCode::CardUcodeParameters ReadParameters(Memory::MemoryManager& memory, u32 address)
 {
   // DMA happens in function called from 0034 - 003b; DMA function is at 0094 - 00a1
   CARDUCode::CardUcodeParameters params;
-  params.mram_input_addr = HLEMemory_Read_U32(address);
-  params.unused = HLEMemory_Read_U16(address + 4);
-  params.input_size = HLEMemory_Read_U16(address + 6);
-  params.aram_work_addr = HLEMemory_Read_U32(address + 8);
-  params.mram_output_addr = HLEMemory_Read_U32(address + 12);
+  params.mram_input_addr = HLEMemory_Read_U32(memory, address);
+  params.unused = HLEMemory_Read_U16(memory, address + 4);
+  params.input_size = HLEMemory_Read_U16(memory, address + 6);
+  params.aram_work_addr = HLEMemory_Read_U32(memory, address + 8);
+  params.mram_output_addr = HLEMemory_Read_U32(memory, address + 12);
 
   return params;
 }
